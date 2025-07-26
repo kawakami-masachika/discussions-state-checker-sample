@@ -9,6 +9,7 @@ on:
 jobs:
   check-discussions:
     runs-on: ubuntu-latest
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -85,47 +86,82 @@ jobs:
               );
               const hasNoComments = discussion.comments.totalCount === 0;
               const isOlderThanThreshold = createdAt < thresholdDate;
-
+              
               return hasTargetLabel && hasNoComments && isOlderThanThreshold;
             });
 
             console.log(`Found ${staleDiscussions.length} stale discussions`);
 
             // Slack通知の準備
-            if (staleDiscussions.length > 0 && SLACK_WEBHOOK_URL) {
-              const discussionList = staleDiscussions.map(discussion => {
-                const daysAgo = Math.floor((new Date() - new Date(discussion.createdAt)) / (1000 * 60 * 60 * 24));
-                return `• <${discussion.url}|${discussion.title}> (${daysAgo}日前に作成)`;
-              }).join('\n');
+            if (SLACK_WEBHOOK_URL) {
+              let slackMessage;
 
-              const slackMessage = {
-                text: "未回答のDiscussionsがあります",
-                blocks: [
-                  {
-                    type: "header",
-                    text: {
-                      type: "plain_text",
-                      text: "🔔 未回答のDiscussionsチェック"
-                    }
-                  },
-                  {
-                    type: "section",
-                    text: {
-                      type: "mrkdwn",
-                      text: `${staleDiscussions.length}件の未回答Discussionsが見つかりました：\n\n${discussionList}`
-                    }
-                  },
-                  {
-                    type: "context",
-                    elements: [
-                      {
-                        type: "mrkdwn",
-                        text: `条件: ${TARGET_LABELS.join(', ')}ラベル | ${DAYS_THRESHOLD}日以上経過 | コメント0件`
+              if (staleDiscussions.length > 0) {
+                // 未回答Discussionsが存在する場合
+                const discussionList = staleDiscussions.map(discussion => {
+                  const daysAgo = Math.floor((new Date() - new Date(discussion.createdAt)) / (1000 * 60 * 60 * 24));
+                  return `• <${discussion.url}|${discussion.title}> (${daysAgo}日前に作成)`;
+                }).join('\n');
+
+                slackMessage = {
+                  text: "未回答のDiscussionsがあります",
+                  blocks: [
+                    {
+                      type: "header",
+                      text: {
+                        type: "plain_text",
+                        text: "🔔 未回答のDiscussionsチェック"
                       }
-                    ]
-                  }
-                ]
-              };
+                    },
+                    {
+                      type: "section",
+                      text: {
+                        type: "mrkdwn",
+                        text: `${staleDiscussions.length}件の未回答Discussionsが見つかりました：\n\n${discussionList}`
+                      }
+                    },
+                    {
+                      type: "context",
+                      elements: [
+                        {
+                          type: "mrkdwn",
+                          text: `条件: ${TARGET_LABELS.join(', ')}ラベル | ${DAYS_THRESHOLD}日以上経過 | コメント0件`
+                        }
+                      ]
+                    }
+                  ]
+                };
+              } else {
+                // 未回答Discussionsが存在しない場合
+                slackMessage = {
+                  text: "未回答のDiscussionsはありません",
+                  blocks: [
+                    {
+                      type: "header",
+                      text: {
+                        type: "plain_text",
+                        text: "✅ 未回答のDiscussionsチェック"
+                      }
+                    },
+                    {
+                      type: "section",
+                      text: {
+                        type: "mrkdwn",
+                        text: "現在、条件に該当する未回答のDiscussionsはありません。"
+                      }
+                    },
+                    {
+                      type: "context",
+                      elements: [
+                        {
+                          type: "mrkdwn",
+                          text: `チェック条件: ${TARGET_LABELS.join(', ')}ラベル | ${DAYS_THRESHOLD}日以上経過 | コメント0件`
+                        }
+                      ]
+                    }
+                  ]
+                };
+              }
               
               // Slackに通知を送信
               const response = await fetch(SLACK_WEBHOOK_URL, {
@@ -135,21 +171,19 @@ jobs:
                 },
                 body: JSON.stringify(slackMessage)
               });
-              
+
               if (response.ok) {
                 console.log('Slack notification sent successfully');
               } else {
                 console.error('Failed to send Slack notification:', response.statusText);
               }
-            } else if (staleDiscussions.length === 0) {
-              console.log('No stale discussions found');
             } else {
               console.log('Slack webhook URL not configured');
             }
-            
+
           } catch (error) {
             console.error('Error checking discussions:', error);
-            
+
             // エラー時のSlack通知
             if (SLACK_WEBHOOK_URL) {
               const errorMessage = {
