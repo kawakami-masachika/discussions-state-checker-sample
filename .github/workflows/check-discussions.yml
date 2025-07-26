@@ -1,0 +1,178 @@
+name: Check Stale Discussions
+
+on:
+  schedule:
+    # 毎日午前9時（JST）に実行（UTC 0時）
+    - cron: '0 0 * * *'
+  workflow_dispatch: # 手動実行も可能
+
+jobs:
+  check-discussions:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Check stale discussions
+      uses: actions/github-script@v7
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const { owner, repo } = context.repo;
+
+          // 設定
+          const TARGET_LABELS = ['help wanted', 'question']; // チェック対象のラベル
+          const DAYS_THRESHOLD = 7; // 7日以上古いもの
+          const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL;
+
+          // 現在時刻から7日前の日時を計算
+          const thresholdDate = new Date();
+          thresholdDate.setDate(thresholdDate.getDate() - DAYS_THRESHOLD);
+
+          try {
+            // Discussionsを取得（GraphQL APIを使用）
+            const query = `
+              query($owner: String!, $repo: String!, $after: String) {
+                repository(owner: $owner, name: $repo) {
+                  discussions(first: 100, after: $after, states: OPEN) {
+                    pageInfo {
+                      hasNextPage
+                      endCursor
+                    }
+                    nodes {
+                      id
+                      title
+                      url
+                      createdAt
+                      comments(first: 1) {
+                        totalCount
+                      }
+                      labels(first: 10) {
+                        nodes {
+                          name
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `;
+
+            let allDiscussions = [];
+            let hasNextPage = true;
+            let after = null;
+
+            // ページネーションで全Discussionsを取得
+            while (hasNextPage) {
+              const result = await github.graphql(query, {
+                owner,
+                repo,
+                after
+              });
+
+              allDiscussions = allDiscussions.concat(result.repository.discussions.nodes);
+              hasNextPage = result.repository.discussions.pageInfo.hasNextPage;
+              after = result.repository.discussions.pageInfo.endCursor;
+            }
+
+            // 条件に合致するDiscussionsをフィルタリング
+            const staleDiscussions = allDiscussions.filter(discussion => {
+              const createdAt = new Date(discussion.createdAt);
+              const hasTargetLabel = discussion.labels.nodes.some(label => 
+                TARGET_LABELS.includes(label.name)
+              );
+              const hasNoComments = discussion.comments.totalCount === 0;
+              const isOlderThanThreshold = createdAt < thresholdDate;
+
+              return hasTargetLabel && hasNoComments && isOlderThanThreshold;
+            });
+
+            console.log(`Found ${staleDiscussions.length} stale discussions`);
+
+            // Slack通知の準備
+            if (staleDiscussions.length > 0 && SLACK_WEBHOOK_URL) {
+              const discussionList = staleDiscussions.map(discussion => {
+                const daysAgo = Math.floor((new Date() - new Date(discussion.createdAt)) / (1000 * 60 * 60 * 24));
+                return `• <${discussion.url}|${discussion.title}> (${daysAgo}日前に作成)`;
+              }).join('\n');
+
+              const slackMessage = {
+                text: "未回答のDiscussionsがあります",
+                blocks: [
+                  {
+                    type: "header",
+                    text: {
+                      type: "plain_text",
+                      text: "🔔 未回答のDiscussionsチェック"
+                    }
+                  },
+                  {
+                    type: "section",
+                    text: {
+                      type: "mrkdwn",
+                      text: `${staleDiscussions.length}件の未回答Discussionsが見つかりました：\n\n${discussionList}`
+                    }
+                  },
+                  {
+                    type: "context",
+                    elements: [
+                      {
+                        type: "mrkdwn",
+                        text: `条件: ${TARGET_LABELS.join(', ')}ラベル | ${DAYS_THRESHOLD}日以上経過 | コメント0件`
+                      }
+                    ]
+                  }
+                ]
+              };
+              
+              // Slackに通知を送信
+              const response = await fetch(SLACK_WEBHOOK_URL, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(slackMessage)
+              });
+              
+              if (response.ok) {
+                console.log('Slack notification sent successfully');
+              } else {
+                console.error('Failed to send Slack notification:', response.statusText);
+              }
+            } else if (staleDiscussions.length === 0) {
+              console.log('No stale discussions found');
+            } else {
+              console.log('Slack webhook URL not configured');
+            }
+            
+          } catch (error) {
+            console.error('Error checking discussions:', error);
+            
+            // エラー時のSlack通知
+            if (SLACK_WEBHOOK_URL) {
+              const errorMessage = {
+                text: "Discussionsチェック中にエラーが発生しました",
+                blocks: [
+                  {
+                    type: "section",
+                    text: {
+                      type: "mrkdwn",
+                      text: `❌ Discussionsチェック中にエラーが発生しました:\n\`\`\`${error.message}\`\`\``
+                    }
+                  }
+                ]
+              };
+
+              await fetch(SLACK_WEBHOOK_URL, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(errorMessage)
+              });
+            }
+
+            throw error;
+          }
