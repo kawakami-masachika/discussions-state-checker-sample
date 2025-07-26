@@ -25,7 +25,7 @@ jobs:
 
           // 設定
           const TARGET_LABELS = ['help wanted', 'question']; // チェック対象のラベル
-          const DAYS_THRESHOLD = 7; // 7日以上古いもの
+          const DAYS_THRESHOLD = 0;
           const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL;
 
           // 現在時刻から7日前の日時を計算
